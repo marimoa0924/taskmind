@@ -393,3 +393,15 @@ button { cursor: pointer; }
 .sheet .out { display: grid; gap: 10px; }
 .sheet .out:empty { display: none; }
 .version { text-align: center; font-size: 11px; color: var(--muted); margin: 0; }
+.sheet .check-row { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text); }
+.sheet .check-row input {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  -webkit-appearance: auto;
+  appearance: auto;
+  accent-color: var(--accent);
+}
+.sheet [hidden] { display: none; }

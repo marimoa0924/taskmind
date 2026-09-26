@@ -56,6 +56,19 @@ export const RESOLUTIONS = {
   skip: '빼기',
 };
 
+/** 추가 일정 전후 이동 시간(분). 이동을 체크하지 않았으면 0. */
+export function travelOf(extra) {
+  const t = extra.travel;
+  if (!t) return { before: 0, after: 0 };
+  return { before: Math.max(0, Number(t.before) || 0), after: Math.max(0, Number(t.after) || 0) };
+}
+
+/** 이동 시간까지 포함해 추가 일정이 차지하는 구간(분) */
+export function spanOf(extra) {
+  const { before, after } = travelOf(extra);
+  return { s: toMin(extra.start) - before, e: toMin(extra.end) + after };
+}
+
 /** 고정 블록이 추가 일정에 얼마나 가려지는지에 따라 기본 처리 방식을 고른다. */
 export function defaultResolution(block, extra) {
   const covered = extra.s <= block.s && block.e <= extra.e;
@@ -89,7 +102,12 @@ export function buildDay(key, extras) {
   }));
   const todays = extras
     .filter((x) => x.date === key)
-    .map((x) => ({ ...x, s: toMin(x.start), e: toMin(x.end) }))
+    .map((x) => {
+      const [s0, e0] = [toMin(x.start), toMin(x.end)];
+      const { before, after } = travelOf(x);
+      // 이동 시간까지 포함한 구간을 추가 일정이 차지하는 시간으로 본다.
+      return { ...x, s0, e0, s: Math.max(0, s0 - before), e: Math.min(DAY_END, e0 + after) };
+    })
     .sort((a, b) => a.s - b.s || String(a.id).localeCompare(String(b.id)));
 
   const conflicts = [];
@@ -122,7 +140,7 @@ export function buildDay(key, extras) {
         continue;
       }
       if (how === 'push') {
-        pushes.push({ ...p, e: x.e + (p.e - p.s), s: x.e, shifted: true });
+        pushes.push({ ...p, e: x.e + (p.e - p.s), s: x.e, origS: p.s, shifted: true });
         continue;
       }
       if (how === 'skip') continue;
@@ -144,7 +162,9 @@ export function buildDay(key, extras) {
       b.e = hit.e + len;
     }
   };
-  for (const pushed of pushes.sort((a, b) => a.s - b.s)) {
+  // 같은 지점으로 밀리는 블록이 여럿이면 원래 늦은 것부터 넣는다.
+  // 먼저 넣은 블록은 다음 블록이 들어올 때 뒤로 밀리므로 원래 순서가 유지된다.
+  for (const pushed of pushes.sort((a, b) => a.s - b.s || b.origS - a.origS)) {
     clearOfExtras(pushed);
     let pointer = pushed.e;
     const after = pieces.filter((p) => p.e > pushed.s).sort((a, b) => a.s - b.s);
@@ -168,6 +188,7 @@ export function buildDay(key, extras) {
         p.s += eaten;
       }
     }
+    delete pushed.origS;
     pieces.push(pushed);
   }
 
@@ -204,9 +225,16 @@ export function buildDay(key, extras) {
         const { origin, ...rest } = p;
         return { ...rest, id: n === 1 ? origin : `${origin}.${n}` };
       }),
-    ...todays.map((x) => ({
-      id: `x${x.id}`, s: x.s, e: x.e, title: x.title, category: x.category, extra: x,
-    })),
+    ...todays.flatMap((x) => {
+      const parts = [{ id: `x${x.id}`, s: x.s0, e: x.e0, title: x.title, category: x.category, extra: x }];
+      if (x.s < x.s0) {
+        parts.push({ id: `x${x.id}-go`, s: x.s, e: x.s0, title: `이동 (${x.title} 가는 길)`, category: 'commute', extra: x, travel: true });
+      }
+      if (x.e0 < x.e) {
+        parts.push({ id: `x${x.id}-back`, s: x.e0, e: x.e, title: `이동 (${x.title} 오는 길)`, category: 'commute', extra: x, travel: true });
+      }
+      return parts;
+    }),
   ].sort((a, b) => a.s - b.s || (a.extra ? -1 : 1));
 
   return { blocks, conflicts, changes };

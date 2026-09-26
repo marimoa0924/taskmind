@@ -1,13 +1,13 @@
 import { CATEGORIES, EXTRA_CATEGORY_KEYS } from './data.js';
 import {
-  DAY_LABELS, RESOLUTIONS, addDays, buildDay, dateKey, defaultResolution, fromMin, kindOf, locate, parseDateKey, range,
+  DAY_LABELS, RESOLUTIONS, addDays, buildDay, dateKey, defaultResolution, fromMin, spanOf, travelOf, kindOf, locate, parseDateKey, range,
   toMin, weekStart,
 } from './schedule.js';
 import { deleteExtra, getExtras, isDone, saveExtra, toggleDone } from './store.js';
 
 const PX_PER_MIN = 1.3; // 주간 뷰 세로 배율
 const REFRESH_MS = 30_000;
-const APP_VERSION = '2026.09.26-3'; // 배포할 때 sw.js의 CACHE와 함께 올린다
+const APP_VERSION = '2026.09.26-4'; // 배포할 때 sw.js의 CACHE와 함께 올린다
 
 const $view = document.getElementById('view');
 const $sheet = document.getElementById('sheet');
@@ -105,7 +105,7 @@ function renderToday() {
     if (isToday && b.e <= now) cls.push('past');
     if (done) cls.push('done');
     if (b.extra || (isToday && !free)) cls.push('tappable');
-    const sub = [b.extra ? '추가 일정 · 탭해서 편집' : '', b.moved ? '자유시간으로 이동됨' : '', b.shifted ? '추가 일정 때문에 밀림' : ''].filter(Boolean).join(' · ');
+    const sub = [b.travel ? '이동 시간 · 탭해서 편집' : b.extra ? '추가 일정 · 탭해서 편집' : '', b.moved ? '자유시간으로 이동됨' : '', b.shifted ? '추가 일정 때문에 밀림' : ''].filter(Boolean).join(' · ');
     return `
       <li class="${cls.join(' ')}" style="--c:${color(b.category)}" data-id="${esc(b.id)}">
         <span class="time">${range(b.s, b.e)}</span>
@@ -365,6 +365,11 @@ function openForm(extra = null) {
         <label>시작<input name="start" type="time" required value="${v.start}" step="300"></label>
         <label>종료<input name="end" type="time" required value="${endValue}" step="300"></label>
       </div>
+      <label class="check-row"><input type="checkbox" name="travel" ${v.travel ? 'checked' : ''}> 이동 시간 포함</label>
+      <div class="row travel-fields" ${v.travel ? '' : 'hidden'}>
+        <label>가는 데 (분)<input name="before" type="number" inputmode="numeric" min="0" max="240" step="5" value="${travelOf(v).before || 30}"></label>
+        <label>오는 데 (분)<input name="after" type="number" inputmode="numeric" min="0" max="240" step="5" value="${travelOf(v).after || 30}"></label>
+      </div>
       <label>카테고리 (선택)
         <select name="category">
           ${EXTRA_CATEGORY_KEYS.map((k) => `<option value="${k}" ${k === v.category ? 'selected' : ''}>${esc(label(k))}</option>`).join('')}
@@ -405,8 +410,15 @@ function openForm(extra = null) {
       title: f.get('title').trim(),
       category: f.get('category') || 'extra',
     };
+    if (f.get('travel')) {
+      const minutes = (name) => Math.min(240, Math.max(0, Math.round(Number(f.get(name)) || 0)));
+      candidate.travel = { before: minutes('before'), after: minutes('after') };
+    }
     if (!candidate.date || !candidate.start || !end) return { candidate, error: '날짜와 시간을 모두 입력해 주세요.' };
     if (toMin(candidate.start) >= toMin(end)) return { candidate, error: '종료 시각이 시작 시각보다 늦어야 해요.' };
+    const span = spanOf(candidate);
+    if (span.s < 0) return { candidate, error: `가는 이동 시간을 넣으면 0시 이전부터 시작해요. 이동 시간을 줄여 주세요.` };
+    if (span.e > 24 * 60) return { candidate, error: `오는 이동 시간을 넣으면 24시를 넘어요. 이동 시간을 줄여 주세요.` };
 
     const others = getExtras().filter((x) => x.id !== candidate.id);
     const mine = (c) => c.extra.id === candidate.id || c.with.id === candidate.id;
@@ -416,7 +428,7 @@ function openForm(extra = null) {
     const clash = overlapping.filter((c) => !c.resolvable);
     const fixed = overlapping.filter((c) => c.resolvable).map((c) => {
       const block = c.extra.id === candidate.id ? c.with : c.extra;
-      const x = { s: toMin(candidate.start), e: toMin(end) };
+      const x = span;
       let how = chosen[block.id] ?? defaultResolution(block, x);
       if (how === 'trim' && c.covered) how = defaultResolution(block, x);
       return { block, covered: c.covered, how };
@@ -475,6 +487,10 @@ function openForm(extra = null) {
     );
   }
 
+  const travelFields = form.querySelector('.travel-fields');
+  form.querySelector('[name="travel"]').addEventListener('change', (e) => {
+    travelFields.hidden = !e.target.checked;
+  });
   form.addEventListener('input', update);
   form.addEventListener('change', update);
 

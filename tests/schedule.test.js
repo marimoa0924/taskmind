@@ -170,3 +170,43 @@ test('밀린 블록은 다른 추가 일정을 건너뛴다', () => {
   // 운동 19–21 → 20–22, 밤 씻기 21–21:40 → 22:30–23:10(추가 일정 b를 건너뜀), 스킨케어 → 23:10–23:30
   assert.deepEqual(at(blocks).slice(-3), ['20:00-22:00 운동', '22:30-23:10 밤 씻기', '23:10-23:30 스킨케어']);
 });
+
+// ── 이동 시간 ─────────────────────────────
+test('이동 시간은 추가 일정 앞뒤에 통학 블록으로 붙는다', () => {
+  const x = { id: 7, date: MON, start: '22:30', end: '23:00', title: '친구 만남', category: 'extra', travel: { before: 20, after: 30 } };
+  const { blocks, conflicts } = buildDay(MON, [x]);
+  assert.deepEqual(conflicts, []);
+  const mine = blocks.filter((b) => b.extra).map((b) => [b.id, fromMin(b.s), fromMin(b.e), b.category]);
+  assert.deepEqual(mine, [
+    ['x7-go', '22:10', '22:30', 'commute'],
+    ['x7', '22:30', '23:00', 'extra'],
+    ['x7-back', '23:00', '23:30', 'commute'],
+  ]);
+});
+
+test('이동 시간이 고정 블록과 겹치면 충돌로 잡고, 처리 방식을 이동 포함 구간 기준으로 적용한다', () => {
+  // 월 21:50–22:30 약속 + 가는 이동 20분 → 21:30부터 차지: 스킨케어(21:40–22:00) 전부, 밤 씻기(21:00–21:40) 일부
+  const x = { id: 8, date: MON, start: '21:50', end: '22:30', title: '약속', category: 'extra', travel: { before: 20, after: 0 } };
+  const { conflicts } = buildDay(MON, [x]);
+  assert.deepEqual(conflicts.map((c) => [c.with.title, c.covered]), [['밤 씻기', false], ['스킨케어', true]]);
+  const { blocks } = buildDay(MON, [{ ...x, resolve: { 'b1-13': 'trim', 'b1-14': 'skip' } }]);
+  assert.ok(at(blocks).includes('21:00-21:30 밤 씻기'));
+  assert.ok(!at(blocks).some((t) => t.includes('스킨케어')));
+});
+
+test('이동을 체크하지 않으면 이동 블록이 없다', () => {
+  const x = { id: 9, date: MON, start: '22:30', end: '23:00', title: 'a', category: 'extra' };
+  assert.equal(buildDay(MON, [x]).blocks.filter((b) => b.travel).length, 0);
+});
+
+test('여러 블록을 함께 뒤로 밀어도 원래 순서를 지킨다', () => {
+  // 월 17:50–21:50 (이동 포함) → 운동·밤 씻기를 밀면 운동 다음 밤 씻기. 24:00 넘는 부분은 잘린다
+  const x = {
+    id: 10, date: MON, start: '18:30', end: '21:00', title: '회식', category: 'extra',
+    travel: { before: 40, after: 50 },
+    resolve: { 'b1-10': 'skip', 'b1-12': 'push', 'b1-13': 'push', 'b1-14': 'trim' },
+  };
+  const { blocks } = buildDay(MON, [x]);
+  const order = at(blocks).filter((t) => /운동|밤 씻기|스킨케어/.test(t));
+  assert.deepEqual(order, ['21:50-23:50 운동', '23:50-24:00 밤 씻기']);
+});
