@@ -1,5 +1,5 @@
 // 오프라인 동작: 앱 파일을 캐시해 두고 네트워크 없이도 열리게 한다.
-const CACHE = 'taskmind-v1';
+const CACHE = 'taskmind-v2';
 const ASSETS = [
   './',
   'index.html',
@@ -24,11 +24,13 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// 네트워크 우선, 실패하면 캐시 (수정 사항이 바로 반영되도록)
+// 네트워크 우선, 실패하면 캐시 (수정 사항이 바로 반영되도록).
+// GitHub Pages는 파일을 10분간 캐시하라고 응답하므로, 브라우저 HTTP 캐시를 건너뛰고 서버에 다시 확인한다.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(url.href, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));

@@ -7,6 +7,7 @@ import { deleteExtra, getExtras, isDone, saveExtra, toggleDone } from './store.j
 
 const PX_PER_MIN = 1.3; // 주간 뷰 세로 배율
 const REFRESH_MS = 30_000;
+const APP_VERSION = '2026.09.26-3'; // 배포할 때 sw.js의 CACHE와 함께 올린다
 
 const $view = document.getElementById('view');
 const $sheet = document.getElementById('sheet');
@@ -266,7 +267,8 @@ function renderMonth() {
       ${['월', '화', '수', '목', '금', '토', '일'].map((w) => `<div class="wd">${w}</div>`).join('')}
       ${cells.join('')}
     </div>
-    <p class="empty">점은 그날의 추가 일정이에요. 날짜를 누르면 그날 일정으로 이동해요.</p>`;
+    <p class="empty">점은 그날의 추가 일정이에요. 날짜를 누르면 그날 일정으로 이동해요.</p>
+    <p class="version">버전 ${APP_VERSION}</p>`;
 
   const move = (n) => {
     if (n === 'today') state.month = todayKey().slice(0, 7);
@@ -536,6 +538,22 @@ document.addEventListener('visibilitychange', () => document.visibilityState ===
 
 render();
 
+// 새 버전이 배포되면 알아서 받아와 다시 불러온다.
+// 홈 화면 앱은 닫았다 열어도 새로고침되지 않을 수 있어서, 앱으로 돌아올 때마다 업데이트를 확인한다.
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker
+    .register('sw.js', { updateViaCache: 'none' })
+    .then((reg) => {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    })
+    .catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded || $sheet.open) return; // 첫 설치 때와 입력 중에는 새로고침하지 않는다
+    reloaded = true;
+    location.reload();
+  });
 }

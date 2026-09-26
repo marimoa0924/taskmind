@@ -392,3 +392,4 @@ button { cursor: pointer; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .sheet .out { display: grid; gap: 10px; }
 .sheet .out:empty { display: none; }
+.version { text-align: center; font-size: 11px; color: var(--muted); margin: 0; }
