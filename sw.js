@@ -1,5 +1,5 @@
 // 오프라인 동작: 앱 파일을 캐시해 두고 네트워크 없이도 열리게 한다.
-const CACHE = 'taskmind-v3';
+const CACHE = 'taskmind-v4';
 const ASSETS = [
   './',
   'index.html',

@@ -405,3 +405,9 @@ button { cursor: pointer; }
   accent-color: var(--accent);
 }
 .sheet [hidden] { display: none; }
+.day-extras .hint { margin: -6px 0 12px; font-size: 13px; color: var(--muted); }
+.day-extras .timeline { margin-bottom: 8px; }
+.day-extras .item { background: var(--bg); grid-template-columns: 92px 1fr auto; }
+.day-extras .chev { color: var(--muted); font-size: 20px; }
+.day-extras .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.day-extras .actions .primary { grid-column: 1 / -1; }

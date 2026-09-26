@@ -7,7 +7,7 @@ import { deleteExtra, getExtras, isDone, saveExtra, toggleDone } from './store.j
 
 const PX_PER_MIN = 1.3; // 주간 뷰 세로 배율
 const REFRESH_MS = 30_000;
-const APP_VERSION = '2026.09.26-4'; // 배포할 때 sw.js의 CACHE와 함께 올린다
+const APP_VERSION = '2026.09.26-5'; // 배포할 때 sw.js의 CACHE와 함께 올린다
 
 const $view = document.getElementById('view');
 const $sheet = document.getElementById('sheet');
@@ -267,7 +267,7 @@ function renderMonth() {
       ${['월', '화', '수', '목', '금', '토', '일'].map((w) => `<div class="wd">${w}</div>`).join('')}
       ${cells.join('')}
     </div>
-    <p class="empty">점은 그날의 추가 일정이에요. 날짜를 누르면 그날 일정으로 이동해요.</p>
+    <p class="empty">점은 그날의 추가 일정이에요. 날짜를 누르면 그날 추가된 일정을 보여줘요.</p>
     <p class="version">버전 ${APP_VERSION}</p>`;
 
   const move = (n) => {
@@ -279,10 +279,7 @@ function renderMonth() {
     btn.addEventListener('click', () => move(btn.dataset.nav === 'today' ? 'today' : Number(btn.dataset.nav))),
   );
   $view.querySelectorAll('.cell').forEach((btn) =>
-    btn.addEventListener('click', () => {
-      state.date = btn.dataset.date;
-      setView('today');
-    }),
+    btn.addEventListener('click', () => openDayExtras(btn.dataset.date)),
   );
 
   const grid = $view.querySelector('.month');
@@ -344,10 +341,52 @@ function describe(c) {
   return parts.join(' · ');
 }
 
-function openForm(extra = null) {
+// ── 시트: 그날 추가된 일정 목록 (월별 뷰) ─────────
+function openDayExtras(key) {
+  const list = getExtras()
+    .filter((x) => x.date === key)
+    .sort((a, b) => toMin(a.start) - toMin(b.start));
+  const items = list.map((x) => {
+    const { before, after } = travelOf(x);
+    const travel = x.travel
+      ? `<span class="sub">이동 ${[before && `가는 ${duration(before)}`, after && `오는 ${duration(after)}`].filter(Boolean).join(' · ') || '없음'}</span>`
+      : '';
+    return `
+      <li class="item tappable" style="--c:${color(x.category)}" data-id="${esc(x.id)}">
+        <span class="time">${range(toMin(x.start), toMin(x.end))}</span>
+        <span class="body">${catChip(x.category)}<span class="t">${esc(x.title)}</span>${travel}</span>
+        <span class="chev" aria-hidden="true">›</span>
+      </li>`;
+  });
+  $sheet.innerHTML = `
+    <div class="day-extras">
+      <h2>${dateLabel(key)}</h2>
+      ${list.length
+        ? `<p class="hint">추가된 일정 ${list.length}개 · 누르면 편집할 수 있어요</p><ol class="timeline">${items.join('')}</ol>`
+        : '<p class="empty">이 날 추가된 일정이 없어요.</p>'}
+      <div class="actions">
+        <button type="button" class="btn" data-act="add">+ 이 날에 추가</button>
+        <button type="button" class="btn" data-act="day">하루 일정 보기</button>
+        <button type="button" class="btn primary" data-act="close">닫기</button>
+      </div>
+    </div>`;
+  $sheet.querySelector('[data-act="close"]').onclick = () => $sheet.close();
+  $sheet.querySelector('[data-act="add"]').onclick = () => openForm(null, key);
+  $sheet.querySelector('[data-act="day"]').onclick = () => {
+    $sheet.close();
+    state.date = key;
+    setView('today');
+  };
+  $sheet.querySelectorAll('.item').forEach((li) =>
+    li.addEventListener('click', () => openForm(list.find((x) => String(x.id) === li.dataset.id))),
+  );
+  if (!$sheet.open) $sheet.showModal();
+}
+
+function openForm(extra = null, presetDate = null) {
   const [ds, de] = defaultTimes();
   const v = extra ?? {
-    date: state.view === 'today' ? state.date : todayKey(),
+    date: presetDate ?? (state.view === 'today' ? state.date : todayKey()),
     start: ds,
     end: de,
     title: '',
