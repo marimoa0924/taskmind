@@ -1,0 +1,14 @@
+{
+  "name": "하루 루틴",
+  "short_name": "루틴",
+  "description": "요일별 하루 일과를 시간 블록으로 보여주는 개인용 루틴 앱",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#11151d",
+  "theme_color": "#2f4a6b",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
