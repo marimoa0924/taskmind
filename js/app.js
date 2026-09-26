@@ -3,11 +3,11 @@ import {
   DAY_LABELS, RESOLUTIONS, addDays, buildDay, dateKey, defaultResolution, fromMin, spanOf, travelOf, kindOf, locate, parseDateKey, range,
   toMin, weekStart,
 } from './schedule.js';
-import { deleteExtra, getExtras, isDone, saveExtra, toggleDone } from './store.js';
+import { deleteExtra, getExtras, getNote, isDone, saveExtra, setNote, toggleDone } from './store.js';
 
 const PX_PER_MIN = 1.3; // 주간 뷰 세로 배율
 const REFRESH_MS = 30_000;
-const APP_VERSION = '2026.09.26-5'; // 배포할 때 sw.js의 CACHE와 함께 올린다
+const APP_VERSION = '2026.09.26-6'; // 배포할 때 sw.js의 CACHE와 함께 올린다
 
 const $view = document.getElementById('view');
 const $sheet = document.getElementById('sheet');
@@ -48,6 +48,24 @@ function duration(min) {
   const h = Math.floor(m / 60);
   if (h && m % 60) return `${h}시간 ${m % 60}분`;
   return h ? `${h}시간` : `${m}분`;
+}
+
+// 블록에 달린 메모: 추가 일정(이동 포함)은 그 일정의 메모, 기본 일정은 매주 반복되는 블록 메모
+const baseId = (block) => block.id.split('.')[0];
+const rawExtra = (block) => getExtras().find((x) => x.id === block.extra.id);
+
+function memoOf(block) {
+  if (block.extra) return rawExtra(block)?.memo ?? '';
+  return getNote(baseId(block));
+}
+
+function saveMemo(block, text) {
+  if (block.extra) {
+    const x = rawExtra(block);
+    if (x) saveExtra({ ...x, memo: text || undefined });
+  } else {
+    setNote(baseId(block), text);
+  }
 }
 
 // ── 화면 2: 오늘 상세 뷰 ─────────────────────
@@ -104,8 +122,9 @@ function renderToday() {
     if (isToday && b.s <= now && now < b.e) cls.push('current');
     if (isToday && b.e <= now) cls.push('past');
     if (done) cls.push('done');
-    if (b.extra || (isToday && !free)) cls.push('tappable');
-    const sub = [b.travel ? '이동 시간 · 탭해서 편집' : b.extra ? '추가 일정 · 탭해서 편집' : '', b.moved ? '자유시간으로 이동됨' : '', b.shifted ? '추가 일정 때문에 밀림' : ''].filter(Boolean).join(' · ');
+    cls.push('tappable');
+    const sub = [b.travel ? '이동 시간' : b.extra ? '추가 일정' : '', b.moved ? '자유시간으로 이동됨' : '', b.shifted ? '추가 일정 때문에 밀림' : ''].filter(Boolean).join(' · ');
+    const memo = memoOf(b);
     return `
       <li class="${cls.join(' ')}" style="--c:${color(b.category)}" data-id="${esc(b.id)}">
         <span class="time">${range(b.s, b.e)}</span>
@@ -113,6 +132,7 @@ function renderToday() {
           ${catChip(b.category)}
           <span class="t">${esc(b.title)}</span>
           ${sub ? `<span class="sub">${sub}</span>` : ''}
+          ${memo ? `<span class="memo-line">📝 ${esc(memo.split('\n')[0])}</span>` : ''}
         </span>
         <button type="button" class="check" aria-label="완료 표시" aria-pressed="${done}" ${isToday && !free ? '' : 'disabled'}>${done ? '✓' : ''}</button>
       </li>`;
@@ -138,19 +158,12 @@ function renderToday() {
 
   $view.querySelectorAll('.item').forEach((li) => {
     const block = blocks.find((b) => b.id === li.dataset.id);
-    const free = kindOf(block.category) === 'free';
     li.querySelector('.check').addEventListener('click', (e) => {
       e.stopPropagation();
       toggleDone(today, block.id);
       render();
     });
-    li.addEventListener('click', () => {
-      if (block.extra) openForm(block.extra);
-      else if (isToday && !free) {
-        toggleDone(today, block.id);
-        render();
-      }
-    });
+    li.addEventListener('click', () => openDetail(state.date, block));
   });
 }
 
@@ -295,6 +308,17 @@ function renderMonth() {
 
 // ── 시트: 블록 상세 ─────────────────────────
 function openDetail(key, block) {
+  const today = todayKey();
+  const free = kindOf(block.category) === 'free';
+  const canCheck = key === today && !free;
+  const done = canCheck && isDone(today, block.id);
+  const notes = [
+    block.travel && '추가 일정의 이동 시간',
+    block.moved && '추가 일정 때문에 자유시간으로 이동됨',
+    block.shifted && '추가 일정 때문에 밀림',
+  ].filter(Boolean);
+  const memoHint = block.extra ? '이 일정에만 저장돼요' : `매주 ${DAY_LABELS[parseDateKey(key).getDay()]}요일 이 일정에 똑같이 보여요`;
+
   $sheet.innerHTML = `
     <div class="detail">
       <h2>${esc(block.title)}</h2>
@@ -302,24 +326,57 @@ function openDetail(key, block) {
         <dt>날짜</dt><dd>${dateLabel(key)}</dd>
         <dt>시간</dt><dd>${range(block.s, block.e)} (${duration(block.e - block.s)})</dd>
         <dt>카테고리</dt><dd>${catChip(block.category)}</dd>
-        ${block.moved ? '<dt>메모</dt><dd>추가 일정 때문에 자유시간으로 이동됨</dd>' : ''}
-        ${block.shifted ? '<dt>메모</dt><dd>추가 일정 때문에 밀림</dd>' : ''}
+        ${notes.length ? `<dt>상태</dt><dd>${notes.join(' · ')}</dd>` : ''}
       </dl>
+      <label class="memo">메모 · 설명
+        <textarea name="memo" rows="4" maxlength="1000" placeholder="준비물, 장소, 할 일 등을 적어 두세요">${esc(memoOf(block))}</textarea>
+        <small>${memoHint} · 입력하면 자동 저장</small>
+      </label>
       <div class="actions">
-        ${block.extra ? '<button type="button" class="btn" data-act="edit">편집</button>' : ''}
-        <button type="button" class="btn" data-act="day">그날 보기</button>
+        ${canCheck ? `<button type="button" class="btn" data-act="done">${done ? '완료 취소' : '완료로 표시'}</button>` : ''}
+        ${block.extra ? '<button type="button" class="btn" data-act="edit">일정 편집</button>' : ''}
+        ${state.view !== 'today' ? '<button type="button" class="btn" data-act="day">그날 보기</button>' : ''}
         <button type="button" class="btn primary" data-act="close">닫기</button>
       </div>
     </div>`;
-  $sheet.querySelector('[data-act="close"]').onclick = () => $sheet.close();
-  $sheet.querySelector('[data-act="day"]').onclick = () => {
-    $sheet.close();
+
+  const memo = $sheet.querySelector('[name="memo"]');
+  let timer;
+  const flush = () => {
+    clearTimeout(timer);
+    saveMemo(block, memo.value.trim());
+  };
+  memo.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(flush, 400);
+  });
+  // 닫힐 때(닫기 버튼·바깥 탭 모두) 메모를 저장하고 목록의 메모 미리보기를 갱신한다.
+  const onClose = () => {
+    flush();
+    render();
+  };
+  $sheet.addEventListener('close', onClose, { once: true });
+  const close = () => $sheet.close();
+  $sheet.querySelector('[data-act="close"]').onclick = close;
+  const act = (name, fn) => {
+    const btn = $sheet.querySelector(`[data-act="${name}"]`);
+    if (btn) btn.onclick = fn;
+  };
+  act('done', () => {
+    toggleDone(today, block.id);
+    close();
+  });
+  act('edit', () => {
+    flush();
+    $sheet.removeEventListener('close', onClose); // 같은 시트에서 편집 화면으로 바뀌므로 이전 메모 저장을 떼어 낸다
+    openForm(rawExtra(block) ?? block.extra);
+  });
+  act('day', () => {
+    close();
     state.date = key;
     setView('today');
-  };
-  const edit = $sheet.querySelector('[data-act="edit"]');
-  if (edit) edit.onclick = () => openForm(block.extra);
-  $sheet.showModal();
+  });
+  if (!$sheet.open) $sheet.showModal();
 }
 
 // ── 시트: 추가 일정 입력 / 편집 ───────────────
@@ -414,6 +471,7 @@ function openForm(extra = null, presetDate = null) {
           ${EXTRA_CATEGORY_KEYS.map((k) => `<option value="${k}" ${k === v.category ? 'selected' : ''}>${esc(label(k))}</option>`).join('')}
         </select>
       </label>
+      <label>메모 (선택)<textarea name="memo" rows="3" maxlength="1000" placeholder="장소, 준비물 등">${esc(v.memo ?? '')}</textarea></label>
       <div class="out"></div>
       <div class="actions">
         ${extra ? '<button type="button" class="btn danger" data-act="delete">삭제</button><span class="spacer"></span>' : ''}
@@ -449,6 +507,8 @@ function openForm(extra = null, presetDate = null) {
       title: f.get('title').trim(),
       category: f.get('category') || 'extra',
     };
+    const memo = (f.get('memo') ?? '').trim();
+    if (memo) candidate.memo = memo;
     if (f.get('travel')) {
       const minutes = (name) => Math.min(240, Math.max(0, Math.round(Number(f.get(name)) || 0)));
       candidate.travel = { before: minutes('before'), after: minutes('after') };

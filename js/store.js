@@ -61,3 +61,18 @@ export function toggleDone(today, id) {
   };
   write(DONE_KEY, done);
 }
+
+// ── 기본 일정 메모: 블록 id별로 저장, 매주 같은 요일·같은 블록에 반복해서 보인다 ──
+const NOTES_KEY = 'taskmind.notes';
+let notes = read(NOTES_KEY, {});
+
+export function getNote(id) {
+  return notes[id] ?? '';
+}
+
+export function setNote(id, text) {
+  notes = { ...notes };
+  if (text) notes[id] = text;
+  else delete notes[id];
+  write(NOTES_KEY, notes);
+}

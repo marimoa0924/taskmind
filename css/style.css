@@ -411,3 +411,30 @@ button { cursor: pointer; }
 .day-extras .chev { color: var(--muted); font-size: 20px; }
 .day-extras .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
 .day-extras .actions .primary { grid-column: 1 / -1; }
+.item .memo-line {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.sheet textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.detail .memo { display: grid; gap: 6px; margin: 8px 0 4px; font-size: 13px; color: var(--muted); }
+.detail .memo small { font-size: 11px; }
+.detail .actions { flex-wrap: wrap; }
