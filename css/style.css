@@ -38,6 +38,7 @@ body {
   font-size: 15px;
   line-height: 1.45;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* 버튼 두 번 탭 확대 방지 */
 }
 
 button, input, select { font: inherit; color: inherit; }
@@ -309,22 +310,40 @@ button { cursor: pointer; }
   border-radius: 18px;
   padding: 20px;
   width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   background: var(--surface);
   color: var(--text);
 }
 .sheet::backdrop { background: rgb(0 0 0 / .45); }
 .sheet h2 { margin: 0 0 12px; font-size: 18px; }
 .sheet form { display: grid; gap: 12px; }
-.sheet label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.sheet label { display: grid; gap: 4px; min-width: 0; font-size: 13px; color: var(--muted); }
 .sheet input, .sheet select {
+  display: block;
   width: 100%;
+  min-width: 0; /* iOS 날짜·시간 입력의 고유 최소 너비 때문에 칸 밖으로 넘치는 문제 방지 */
+  min-height: 44px;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--bg);
   color: var(--text);
+  font-size: 16px; /* 16px 미만이면 iOS가 입력칸을 누를 때 화면을 확대한다 */
+  -webkit-appearance: none;
+  appearance: none;
 }
-.sheet .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet select {
+  padding-right: 36px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.sheet input::-webkit-date-and-time-value { text-align: left; }
+.sheet input:focus-visible, .sheet select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sheet .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .sheet .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
 .sheet .actions .spacer { flex: 1; }
 .btn {
