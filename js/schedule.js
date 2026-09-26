@@ -47,17 +47,40 @@ export function kindOf(category) {
 
 const overlaps = (a, b) => a.s < b.e && b.s < a.e;
 
+export const DAY_END = 24 * 60;
+
+// 고정 블록과 겹칠 때 고를 수 있는 처리 방식
+export const RESOLUTIONS = {
+  trim: '남는 시간만',
+  push: '뒤로 밀기',
+  skip: '빼기',
+};
+
+/** 고정 블록이 추가 일정에 얼마나 가려지는지에 따라 기본 처리 방식을 고른다. */
+export function defaultResolution(block, extra) {
+  const covered = extra.s <= block.s && block.e <= extra.e;
+  if (!covered) return 'trim';
+  return block.category === 'meal' ? 'skip' : 'push';
+}
+
 /**
  * 특정 날짜의 최종 일정을 계산한다.
  *
  * 규칙
- * - 추가 일정이 고정 블록이나 다른 추가 일정과 겹치면 conflict (저장 불가).
  * - 자유시간(free)은 빈 칸: 추가 일정이 겹치면 그만큼 사라진다.
  * - 유동 블록(flexible)과 겹치면, 밀려난 시간을 그날 남은 자유시간으로 옮긴다.
  *   자유시간이 모자라면 남는 만큼은 단축된다.
+ * - 고정 블록과 겹치면 추가 일정의 resolve[블록 id]에 따라 처리한다.
+ *     trim  겹치지 않는 부분만 남긴다
+ *     push  추가 일정이 끝난 직후로 옮긴다. 뒤 일정은 자유시간·유동 블록이 먼저 줄어들며
+ *           흡수하고, 모자라면 고정 블록이 줄줄이 밀린다. 24:00을 넘는 부분은 잘린다.
+ *     skip  그날은 뺀다
+ *   처리 방식이 없으면 conflict로 돌려준다 (저장 불가).
+ * - 추가 일정끼리 겹치면 항상 conflict.
  *
  * @returns {{ blocks: object[], conflicts: object[], changes: object[] }}
- *   blocks: { id, s, e, title, category, extra?, moved? } 시간순
+ *   blocks: { id, s, e, title, category, extra?, moved?, shifted? } 시간순
+ *   conflicts: { extra, with, resolvable, covered }
  */
 export function buildDay(key, extras) {
   const day = parseDateKey(key).getDay();
@@ -72,34 +95,88 @@ export function buildDay(key, extras) {
   const conflicts = [];
   todays.forEach((x, i) => {
     for (const b of base) {
-      if (kindOf(b.category) === 'fixed' && overlaps(x, b)) conflicts.push({ extra: x, with: b });
+      if (kindOf(b.category) === 'fixed' && overlaps(x, b) && !x.resolve?.[b.id]) {
+        conflicts.push({ extra: x, with: b, resolvable: true, covered: x.s <= b.s && b.e <= x.e });
+      }
     }
     for (const y of todays.slice(i + 1)) {
-      if (overlaps(x, y)) conflicts.push({ extra: x, with: y });
+      if (overlaps(x, y)) conflicts.push({ extra: x, with: y, resolvable: false });
     }
   });
 
-  // 기본 블록에서 추가 일정 구간을 잘라낸다.
+  // 1) 기본 블록에서 추가 일정 구간을 잘라낸다.
   let pieces = base.map((b) => ({ ...b, origin: b.id }));
   const displaced = [];
+  const pushes = [];
   for (const x of todays) {
     const next = [];
     for (const p of pieces) {
-      if (kindOf(p.category) === 'fixed' || !overlaps(p, x)) {
+      if (!overlaps(p, x)) {
         next.push(p);
         continue;
       }
+      const kind = kindOf(p.category);
+      const how = kind === 'fixed' ? x.resolve?.[p.origin] : 'trim';
+      if (!how) {
+        next.push(p); // 미해결 충돌: 그대로 둔다
+        continue;
+      }
+      if (how === 'push') {
+        pushes.push({ ...p, e: x.e + (p.e - p.s), s: x.e, shifted: true });
+        continue;
+      }
+      if (how === 'skip') continue;
       const cutS = Math.max(p.s, x.s);
       const cutE = Math.min(p.e, x.e);
       if (p.s < cutS) next.push({ ...p, e: cutS });
       if (cutE < p.e) next.push({ ...p, s: cutE });
-      if (kindOf(p.category) === 'flexible') displaced.push({ ...p, s: cutS, e: cutE });
+      if (kind === 'flexible') displaced.push({ ...p, s: cutS, e: cutE });
     }
     pieces = next;
   }
 
-  // 밀려난 유동 블록을 남은 자유시간으로 옮긴다: 뒤쪽 가장 가까운 자유시간 우선, 없으면 앞쪽.
-  for (const d of displaced) {
+  // 2) 뒤로 민 블록을 넣고, 뒤 일정을 줄줄이 조정한다.
+  const clearOfExtras = (b) => {
+    let hit;
+    while ((hit = todays.find((x) => overlaps(x, b)))) {
+      const len = b.e - b.s;
+      b.s = hit.e;
+      b.e = hit.e + len;
+    }
+  };
+  for (const pushed of pushes.sort((a, b) => a.s - b.s)) {
+    clearOfExtras(pushed);
+    let pointer = pushed.e;
+    const after = pieces.filter((p) => p.e > pushed.s).sort((a, b) => a.s - b.s);
+    for (const p of after) {
+      if (p.s >= pointer) break;
+      const kind = kindOf(p.category);
+      if (kind === 'fixed') {
+        const len = p.e - p.s;
+        p.s = Math.max(p.s, pointer);
+        p.e = p.s + len;
+        p.shifted = true;
+        clearOfExtras(p);
+        pointer = p.e;
+      } else {
+        if (p.s < pushed.s) {
+          pieces.push({ ...p, e: pushed.s }); // 민 블록 앞쪽은 그대로 둔다
+          p.s = pushed.s;
+        }
+        const eaten = Math.min(p.e, pointer) - p.s;
+        if (kind === 'flexible') displaced.push({ ...p, e: p.s + eaten });
+        p.s += eaten;
+      }
+    }
+    pieces.push(pushed);
+  }
+
+  // 하루 끝(24:00)을 넘는 부분은 자른다.
+  for (const p of pieces) p.e = Math.min(p.e, DAY_END);
+  pieces = pieces.filter((p) => p.e > p.s);
+
+  // 3) 밀려난 유동 블록을 남은 자유시간으로 옮긴다: 뒤쪽 가장 가까운 자유시간 우선, 없으면 앞쪽.
+  for (const d of displaced.sort((a, b) => a.s - b.s)) {
     let need = d.e - d.s;
     while (need > 0) {
       const frees = pieces.filter((p) => p.category === 'free' && p.e > p.s);
@@ -145,6 +222,7 @@ function describeChanges(base, pieces) {
     const moved = mine.filter((p) => p.moved);
     const lost = b.e - b.s - mine.reduce((sum, p) => sum + p.e - p.s, 0);
     changes.push({
+      id: b.id,
       title: b.title,
       category: b.category,
       from: range(b.s, b.e),

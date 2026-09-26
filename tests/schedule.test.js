@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WEEKLY_BLOCKS } from '../js/data.js';
-import { buildDay, locate, toMin, weekStart, fromMin } from '../js/schedule.js';
+import { buildDay, defaultResolution, locate, toMin, weekStart, fromMin } from '../js/schedule.js';
 
 // 2026-09-28 = 월, 2026-09-29 = 화, 2026-10-03 = 토
 const MON = '2026-09-28';
@@ -117,4 +117,56 @@ test('locate: 기상 전 / 진행 중 / 종료 후', () => {
   assert.equal(mid.current.title, '영어 공부');
   assert.equal(mid.next.title, '방 청소');
   assert.equal(locate(blocks, toMin('22:30')).phase, 'after');
+});
+
+// ── 고정 블록과 겹칠 때 처리 방식 ─────────────────
+const SUN = '2026-09-27';
+const dinner = (resolve) => ({ id: 1, date: SUN, start: '18:00', end: '21:00', title: '홍보부 회식', category: 'extra', resolve });
+const at = (blocks) => blocks.filter((b) => !b.extra).map((b) => `${fromMin(b.s)}-${fromMin(b.e)} ${b.title}`);
+
+test('처리 방식이 없으면 해결 가능한 충돌로 알려준다', () => {
+  const { conflicts } = buildDay(SUN, [dinner()]);
+  assert.deepEqual(conflicts.map((c) => [c.with.title, c.resolvable, c.covered]), [
+    ['저녁', true, true],
+    ['운동', true, true],
+  ]);
+});
+
+test('defaultResolution: 부분 겹침은 남기기, 다 가려진 식사는 빼기, 나머지는 밀기', () => {
+  const x = { s: toMin('18:00'), e: toMin('21:00') };
+  assert.equal(defaultResolution({ s: toMin('17:00'), e: toMin('18:30'), category: 'class' }, x), 'trim');
+  assert.equal(defaultResolution({ s: toMin('18:30'), e: toMin('19:00'), category: 'meal' }, x), 'skip');
+  assert.equal(defaultResolution({ s: toMin('19:00'), e: toMin('21:00'), category: 'exercise' }, x), 'push');
+});
+
+test('빼기 + 뒤로 밀기: 뒤 일정이 줄줄이 밀리고 유동·자유시간이 먼저 흡수한다', () => {
+  const { blocks, conflicts, changes } = buildDay(SUN, [dinner({ 'b0-7': 'skip', 'b0-8': 'push' })]);
+  assert.deepEqual(conflicts, []);
+  assert.deepEqual(at(blocks).slice(-5), [
+    '13:30-16:30 작업 시간 (희곡·3D모델링·커미션 등)',
+    '16:30-18:00 영어 공부',
+    '21:00-23:00 운동',
+    '23:00-23:40 밤 씻기',
+    '23:40-24:00 스킨케어',
+  ]);
+  const byTitle = Object.fromEntries(changes.map((c) => [c.title, c]));
+  assert.equal(byTitle['저녁'].lostMinutes, 30);
+  assert.equal(byTitle['독서'].lostMinutes, 60);
+  assert.ok(blocks.find((b) => b.title === '운동').shifted);
+});
+
+test('남는 시간만: 겹치지 않는 부분만 남긴다', () => {
+  const x = { id: 1, date: MON, start: '12:00', end: '12:45', title: '약속', category: 'extra', resolve: { 'b1-4': 'trim', 'b1-5': 'trim' } };
+  const { blocks, conflicts } = buildDay(MON, [x]);
+  assert.deepEqual(conflicts, []);
+  assert.ok(at(blocks).includes('11:00-12:00 유빈쌤 수업 (온라인)'));
+  assert.ok(at(blocks).includes('12:45-13:00 점심'));
+});
+
+test('밀린 블록은 다른 추가 일정을 건너뛴다', () => {
+  const a = { id: 1, date: MON, start: '19:00', end: '20:00', title: 'a', category: 'extra', resolve: { 'b1-12': 'push' } };
+  const b = { id: 2, date: MON, start: '22:00', end: '22:30', title: 'b', category: 'extra' };
+  const { blocks } = buildDay(MON, [a, b]);
+  // 운동 19–21 → 20–22, 밤 씻기 21–21:40 → 22:30–23:10(추가 일정 b를 건너뜀), 스킨케어 → 23:10–23:30
+  assert.deepEqual(at(blocks).slice(-3), ['20:00-22:00 운동', '22:30-23:10 밤 씻기', '23:10-23:30 스킨케어']);
 });

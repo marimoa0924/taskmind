@@ -1,6 +1,7 @@
 import { CATEGORIES, EXTRA_CATEGORY_KEYS } from './data.js';
 import {
-  DAY_LABELS, addDays, buildDay, dateKey, fromMin, kindOf, locate, parseDateKey, range, toMin, weekStart,
+  DAY_LABELS, RESOLUTIONS, addDays, buildDay, dateKey, defaultResolution, fromMin, kindOf, locate, parseDateKey, range,
+  toMin, weekStart,
 } from './schedule.js';
 import { deleteExtra, getExtras, isDone, saveExtra, toggleDone } from './store.js';
 
@@ -103,7 +104,7 @@ function renderToday() {
     if (isToday && b.e <= now) cls.push('past');
     if (done) cls.push('done');
     if (b.extra || (isToday && !free)) cls.push('tappable');
-    const sub = [b.extra ? '추가 일정 · 탭해서 편집' : '', b.moved ? '자유시간으로 이동됨' : ''].filter(Boolean).join(' · ');
+    const sub = [b.extra ? '추가 일정 · 탭해서 편집' : '', b.moved ? '자유시간으로 이동됨' : '', b.shifted ? '추가 일정 때문에 밀림' : ''].filter(Boolean).join(' · ');
     return `
       <li class="${cls.join(' ')}" style="--c:${color(b.category)}" data-id="${esc(b.id)}">
         <span class="time">${range(b.s, b.e)}</span>
@@ -303,6 +304,7 @@ function openDetail(key, block) {
         <dt>시간</dt><dd>${range(block.s, block.e)} (${duration(block.e - block.s)})</dd>
         <dt>카테고리</dt><dd>${catChip(block.category)}</dd>
         ${block.moved ? '<dt>메모</dt><dd>추가 일정 때문에 자유시간으로 이동됨</dd>' : ''}
+        ${block.shifted ? '<dt>메모</dt><dd>추가 일정 때문에 밀림</dd>' : ''}
       </dl>
       <div class="actions">
         ${block.extra ? '<button type="button" class="btn" data-act="edit">편집</button>' : ''}
@@ -332,10 +334,11 @@ function describe(c) {
   if (c.category === 'free') {
     return c.kept.length ? `남은 시간 ${c.kept.join(', ')}` : '추가 일정에 사용됨';
   }
+  if (!c.kept.length && !c.moved.length) return '오늘은 빠짐';
   const parts = [];
-  if (c.kept.length) parts.push(`유지 ${c.kept.join(', ')}`);
+  if (c.kept.length) parts.push(`→ ${c.kept.join(', ')}`);
   if (c.moved.length) parts.push(`자유시간으로 이동 ${c.moved.join(', ')}`);
-  if (c.lostMinutes) parts.push(`${duration(c.lostMinutes)} 단축`);
+  if (c.lostMinutes) parts.push(`${duration(c.lostMinutes)} 줄어듦`);
   return parts.join(' · ');
 }
 
@@ -348,6 +351,8 @@ function openForm(extra = null) {
     title: '',
     category: 'extra',
   };
+  // 고정 블록별 처리 방식. 사용자가 직접 고른 것만 기억하고, 나머지는 기본값을 쓴다.
+  const chosen = { ...(extra?.resolve ?? {}) };
   const endValue = v.end === '24:00' ? '23:59' : v.end;
   $sheet.innerHTML = `
     <h2>${extra ? '일정 편집' : '새 일정 추가'}</h2>
@@ -367,12 +372,13 @@ function openForm(extra = null) {
       <div class="actions">
         ${extra ? '<button type="button" class="btn danger" data-act="delete">삭제</button><span class="spacer"></span>' : ''}
         <button type="button" class="btn" data-act="cancel">취소</button>
-        <button type="submit" class="btn primary">확인</button>
+        <button type="submit" class="btn primary">저장</button>
       </div>
     </form>`;
 
   const form = $sheet.querySelector('form');
   const out = form.querySelector('.out');
+  const submit = form.querySelector('[type="submit"]');
   $sheet.querySelector('[data-act="cancel"]').onclick = () => $sheet.close();
   const del = $sheet.querySelector('[data-act="delete"]');
   if (del) {
@@ -384,80 +390,110 @@ function openForm(extra = null) {
     };
   }
 
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
+  // 입력값으로 저장할 일정과 그 결과를 계산한다.
+  function evaluate() {
     const f = new FormData(form);
-    const title = f.get('title').trim();
     let end = f.get('end');
-    if (end === '23:59') end = '24:00';
-    if (end === '00:00') end = '24:00';
+    if (end === '23:59' || end === '00:00') end = '24:00';
     const candidate = {
       id: extra?.id ?? '__new',
       date: f.get('date'),
       start: f.get('start'),
       end,
-      title,
+      title: f.get('title').trim(),
       category: f.get('category') || 'extra',
     };
-
-    if (!title || !candidate.date || !candidate.start || !end) {
-      out.innerHTML = '<p class="msg error">제목, 날짜, 시간을 모두 입력해 주세요.</p>';
-      return;
-    }
-    if (toMin(candidate.start) >= toMin(end)) {
-      out.innerHTML = '<p class="msg error">종료 시각이 시작 시각보다 늦어야 해요.</p>';
-      return;
-    }
+    if (!candidate.date || !candidate.start || !end) return { candidate, error: '날짜와 시간을 모두 입력해 주세요.' };
+    if (toMin(candidate.start) >= toMin(end)) return { candidate, error: '종료 시각이 시작 시각보다 늦어야 해요.' };
 
     const others = getExtras().filter((x) => x.id !== candidate.id);
+    const mine = (c) => c.extra.id === candidate.id || c.with.id === candidate.id;
+
+    // 겹치는 고정 블록을 찾고, 각각의 처리 방식을 정한다.
+    const overlapping = buildDay(candidate.date, [...others, { ...candidate, resolve: {} }]).conflicts.filter(mine);
+    const clash = overlapping.filter((c) => !c.resolvable);
+    const fixed = overlapping.filter((c) => c.resolvable).map((c) => {
+      const block = c.extra.id === candidate.id ? c.with : c.extra;
+      const x = { s: toMin(candidate.start), e: toMin(end) };
+      let how = chosen[block.id] ?? defaultResolution(block, x);
+      if (how === 'trim' && c.covered) how = defaultResolution(block, x);
+      return { block, covered: c.covered, how };
+    });
+    candidate.resolve = Object.fromEntries(fixed.map((r) => [r.block.id, r.how]));
+    if (!fixed.length) delete candidate.resolve;
+
     const before = buildDay(candidate.date, others);
     const after = buildDay(candidate.date, [...others, candidate]);
-
-    const clashes = after.conflicts.filter((c) => c.extra.id === candidate.id || c.with.extra?.id === candidate.id || c.with.id === candidate.id);
-    if (clashes.length) {
-      const names = clashes.map((c) => {
-        const o = c.extra.id === candidate.id ? c.with : c.extra;
-        return `${esc(o.title)} (${range(o.s, o.e)})`;
-      });
-      out.innerHTML = `<p class="msg error">고정 일정과 겹쳐서 저장할 수 없어요: ${names.join(', ')}.<br>시간을 다시 골라 주세요.</p>`;
-      return;
-    }
-
     const prev = new Set(before.changes.map((c) => JSON.stringify(c)));
     const diff = after.changes.filter((c) => !prev.has(JSON.stringify(c)));
+    return { candidate, clash, fixed, diff };
+  }
 
-    const commit = () => {
-      const { id, ...rest } = candidate;
-      const saved = saveExtra(extra ? { id: extra.id, ...rest } : rest);
-      $sheet.close();
-      state.date = saved.date;
-      render();
-    };
-
-    if (!diff.length || form.dataset.confirmed === 'yes') {
-      commit();
+  function update() {
+    const r = evaluate();
+    submit.disabled = Boolean(r.error || r.clash?.length);
+    if (r.error) {
+      out.innerHTML = `<p class="msg error">${r.error}</p>`;
       return;
     }
-
-    // 유동 블록 재배치 미리보기
-    out.innerHTML = `
-      <p class="msg info">이 일정을 넣으면 그날 일정이 이렇게 바뀌어요. 확인하면 저장할게요.</p>
-      <ul class="changes">
-        ${diff.map((c) => `<li>${catChip(c.category)} <b>${esc(c.title)}</b> <span class="arrow">${c.from} →</span><br>${describe(c)}</li>`).join('')}
-      </ul>`;
-    form.querySelector('[type="submit"]').textContent = '이대로 저장';
-    form.dataset.confirmed = 'yes';
-  });
-
-  // 입력이 바뀌면 미리보기를 다시 계산하게 한다.
-  form.addEventListener('input', () => {
-    if (form.dataset.confirmed) {
-      delete form.dataset.confirmed;
-      out.innerHTML = '';
-      form.querySelector('[type="submit"]').textContent = '확인';
+    const html = [];
+    if (r.clash.length) {
+      const names = r.clash.map((c) => {
+        const o = c.extra.id === r.candidate.id ? c.with : c.extra;
+        return `${esc(o.title)} (${range(o.s, o.e)})`;
+      });
+      html.push(`<p class="msg error">다른 추가 일정과 겹쳐요: ${names.join(', ')}. 시간을 다시 골라 주세요.</p>`);
     }
+    if (r.fixed.length) {
+      html.push(`<div class="resolve">
+        <p class="resolve-title">겹치는 고정 일정을 어떻게 할까요?</p>
+        ${r.fixed.map(({ block, covered, how }) => `
+          <div class="resolve-row">
+            <div class="resolve-name">${catChip(block.category)} <b>${esc(block.title)}</b> <span class="muted">${range(block.s, block.e)}</span></div>
+            <div class="seg" role="radiogroup" aria-label="${esc(block.title)} 처리 방식">
+              ${Object.entries(RESOLUTIONS).map(([k, text]) => `
+                <button type="button" role="radio" data-block="${esc(block.id)}" data-how="${k}"
+                  aria-checked="${how === k}" ${k === 'trim' && covered ? 'disabled title="전부 겹쳐서 남는 시간이 없어요"' : ''}>${text}</button>`).join('')}
+            </div>
+          </div>`).join('')}
+      </div>`);
+    }
+    if (!r.clash.length && r.diff.length) {
+      html.push(`<p class="msg info">저장하면 그날 일정이 이렇게 바뀌어요.</p>
+        <ul class="changes">
+          ${r.diff.map((c) => `<li>${catChip(c.category)} <b>${esc(c.title)}</b> <span class="arrow">${c.from}</span><br>${describe(c)}</li>`).join('')}
+        </ul>`);
+    }
+    out.innerHTML = html.join('');
+    out.querySelectorAll('.seg button').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        chosen[btn.dataset.block] = btn.dataset.how;
+        update();
+      }),
+    );
+  }
+
+  form.addEventListener('input', update);
+  form.addEventListener('change', update);
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const r = evaluate();
+    if (!r.candidate.title) {
+      update();
+      out.insertAdjacentHTML('afterbegin', '<p class="msg error">제목을 입력해 주세요.</p>');
+      form.querySelector('[name="title"]').focus();
+      return;
+    }
+    if (r.error || r.clash.length) return update();
+    const { id, ...rest } = r.candidate;
+    const saved = saveExtra(extra ? { id: extra.id, ...rest } : rest);
+    $sheet.close();
+    state.date = saved.date;
+    render();
   });
 
+  update();
   if (!$sheet.open) $sheet.showModal();
   if (!extra) form.querySelector('[name="title"]').focus();
 }

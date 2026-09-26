@@ -371,3 +371,24 @@ button { cursor: pointer; }
   .blk span { font-size: 10px; }
   .week { grid-template-columns: 44px repeat(7, 1fr); }
 }
+
+/* ── 고정 일정 겹침 처리 선택 ─────────── */
+.resolve { display: grid; gap: 10px; }
+.resolve-title { margin: 0; font-size: 14px; font-weight: 600; }
+.resolve-row { display: grid; gap: 6px; background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.resolve-name { font-size: 14px; }
+.resolve-name .muted { color: var(--muted); font-size: 13px; }
+.seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; background: var(--surface-2); border-radius: 10px; padding: 3px; }
+.seg button {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 4px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.seg button[aria-checked="true"] { background: var(--accent); color: var(--bg); font-weight: 600; }
+.seg button:disabled { opacity: .35; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.sheet .out { display: grid; gap: 10px; }
+.sheet .out:empty { display: none; }
