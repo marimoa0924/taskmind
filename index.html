@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>하루 루틴</title>
+  <meta name="description" content="요일별 하루 일과를 시간 블록으로 보여주는 개인용 루틴 앱">
+  <meta name="theme-color" content="#f3f5f9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#11151d" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="view" aria-live="polite"></main>
+
+  <button id="add-btn" class="fab" type="button" aria-label="새 일정 추가">+</button>
+
+  <nav class="tabbar" aria-label="화면 전환">
+    <button type="button" data-view="today">오늘</button>
+    <button type="button" data-view="week">주간</button>
+    <button type="button" data-view="month">월별</button>
+  </nav>
+
+  <dialog id="sheet" class="sheet"></dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
