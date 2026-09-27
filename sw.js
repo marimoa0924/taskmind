@@ -1,5 +1,5 @@
 // 오프라인 동작: 앱 파일을 캐시해 두고 네트워크 없이도 열리게 한다.
-const CACHE = 'taskmind-v5';
+const CACHE = 'taskmind-v6';
 const ASSETS = [
   './',
   'index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   'js/data.js',
   'js/schedule.js',
   'js/store.js',
+  'js/ics.js',
   'manifest.webmanifest',
   'icons/icon.svg',
 ];
@@ -37,5 +38,16 @@ self.addEventListener('fetch', (e) => {
         return res;
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true })),
+  );
+});
+
+// 알림을 누르면 열려 있는 앱으로 가고, 없으면 새로 연다.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const win = list.find((c) => 'focus' in c);
+      return win ? win.focus() : self.clients.openWindow('./');
+    }),
   );
 });

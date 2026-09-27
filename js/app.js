@@ -3,11 +3,15 @@ import {
   DAY_LABELS, RESOLUTIONS, addDays, buildDay, dateKey, defaultResolution, fromMin, spanOf, travelOf, kindOf, locate, parseDateKey, range,
   toMin, weekStart,
 } from './schedule.js';
-import { deleteExtra, getExtras, getNote, isDone, saveExtra, setNote, toggleDone } from './store.js';
+import { extrasICS, upcomingExtras } from './ics.js';
+import {
+  deleteExtra, getExtras, getNote, getSettings, isDone, saveExtra, setNote, setSettings, toggleDone,
+} from './store.js';
 
 const PX_PER_MIN = 1.3; // 주간 뷰 세로 배율
 const REFRESH_MS = 30_000;
-const APP_VERSION = '2026.09.26-6'; // 배포할 때 sw.js의 CACHE와 함께 올린다
+const ALARM_CHECK_MS = 10_000;
+const APP_VERSION = '2026.09.27-1'; // 배포할 때 sw.js의 CACHE와 함께 올린다
 
 const $view = document.getElementById('view');
 const $sheet = document.getElementById('sheet');
@@ -144,6 +148,7 @@ function renderToday() {
       <h1>${dateLabel(state.date)}</h1>
       ${isToday ? '' : '<button type="button" class="chip-btn" data-nav="today">오늘</button>'}
       <button type="button" class="icon-btn" data-nav="1" aria-label="다음 날">▶</button>
+      <button type="button" class="icon-btn" data-act="alarm" aria-label="알림 설정">${getSettings().notify ? '🔔' : '🔕'}</button>
     </header>
     ${card}
     <ol class="timeline">${items.join('') || '<li class="empty">일정이 없어요</li>'}</ol>`;
@@ -155,6 +160,8 @@ function renderToday() {
       render();
     }),
   );
+
+  $view.querySelector('[data-act="alarm"]').addEventListener('click', openAlarmSettings);
 
   $view.querySelectorAll('.item').forEach((li) => {
     const block = blocks.find((b) => b.id === li.dataset.id);
@@ -335,6 +342,7 @@ function openDetail(key, block) {
       <div class="actions">
         ${canCheck ? `<button type="button" class="btn" data-act="done">${done ? '완료 취소' : '완료로 표시'}</button>` : ''}
         ${block.extra ? '<button type="button" class="btn" data-act="edit">일정 편집</button>' : ''}
+        ${block.extra ? '<button type="button" class="btn" data-act="ics">캘린더에 추가</button>' : ''}
         ${state.view !== 'today' ? '<button type="button" class="btn" data-act="day">그날 보기</button>' : ''}
         <button type="button" class="btn primary" data-act="close">닫기</button>
       </div>
@@ -370,6 +378,10 @@ function openDetail(key, block) {
     flush();
     $sheet.removeEventListener('close', onClose); // 같은 시트에서 편집 화면으로 바뀌므로 이전 메모 저장을 떼어 낸다
     openForm(rawExtra(block) ?? block.extra);
+  });
+  act('ics', () => {
+    const x = rawExtra(block);
+    if (x) downloadICS(`taskmind-${x.date}.ics`, extrasICS([x]));
   });
   act('day', () => {
     close();
@@ -615,6 +627,151 @@ function openForm(extra = null, presetDate = null) {
   if (!extra) form.querySelector('[name="title"]').focus();
 }
 
+// ── 알림 ─────────────────────────────────
+// 앱이 열려 있는(또는 방금 내린) 동안 일정 시작 시각에 알림을 띄운다.
+// 앱이 꺼져 있을 때는 캘린더 구독(routine.ics)과 추가 일정 내보내기로 폰 캘린더가 대신 울린다.
+const alarmState = { date: todayKey(), checked: nowMinutes() };
+const LATE_LIMIT_MIN = 5; // 이보다 늦게 알아챈 일정은 알리지 않는다 (앱을 오래 닫아 둔 경우)
+
+function checkAlarms() {
+  const today = todayKey();
+  const now = nowMinutes();
+  if (alarmState.date !== today) Object.assign(alarmState, { date: today, checked: -1 });
+  const since = alarmState.checked;
+  alarmState.checked = now;
+  if (!getSettings().notify) return;
+  const { blocks } = buildDay(today, getExtras());
+  const due = blocks.filter((b) => kindOf(b.category) !== 'free' && b.s > since && b.s <= now && now - b.s <= LATE_LIMIT_MIN);
+  const block = due[due.length - 1];
+  if (block) notify(block, blocks);
+}
+
+async function notify(block, blocks) {
+  const next = blocks.find((b) => b.s >= block.e && kindOf(b.category) !== 'free');
+  const memo = memoOf(block).split('\n')[0];
+  const title = `지금: ${block.title}`;
+  const body = [range(block.s, block.e), memo && `📝 ${memo}`, next && `다음 ${fromMin(next.s)} ${next.title}`]
+    .filter(Boolean)
+    .join('\n');
+
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      const opts = { body, tag: `taskmind-${block.id}`, icon: 'icons/icon.svg', badge: 'icons/icon.svg', vibrate: [200, 100, 200] };
+      if (reg) await reg.showNotification(title, opts);
+      else new Notification(title, opts);
+    } catch {
+      /* 알림을 못 띄워도 화면 안 알림은 보여 준다 */
+    }
+  }
+  if (document.visibilityState === 'visible') {
+    showToast(title, body);
+    navigator.vibrate?.([200, 100, 200]);
+  }
+}
+
+function showToast(title, body) {
+  document.querySelector('.toast')?.remove();
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.setAttribute('role', 'alert');
+  el.innerHTML = `<b>${esc(title)}</b><span>${esc(body).replace(/\n/g, '<br>')}</span>`;
+  el.addEventListener('click', () => el.remove());
+  document.body.append(el);
+  setTimeout(() => el.remove(), 10_000);
+}
+
+function downloadICS(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+function notifyStatus() {
+  if (!('Notification' in window)) {
+    return '이 브라우저는 알림을 지원하지 않아요. 아이폰은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요. 켜 두면 앱을 보고 있을 때 화면 안에 알림이 떠요.';
+  }
+  if (Notification.permission === 'denied') {
+    return '알림 권한이 거부되어 있어요. 폰 설정에서 이 앱의 알림을 허용해 주세요. 그 전까지는 화면 안 알림만 떠요.';
+  }
+  return '앱이 열려 있을 때 일정이 시작되면 알림이 와요. 앱을 닫아 둬도 받으려면 아래 캘린더 연동을 함께 써 주세요.';
+}
+
+function openAlarmSettings() {
+  const on = getSettings().notify;
+  const routineUrl = new URL('routine.ics', location.href).href;
+  const webcal = routineUrl.replace(/^https?:/, 'webcal:');
+  const upcoming = upcomingExtras(getExtras());
+  $sheet.innerHTML = `
+    <div class="alarm-settings">
+      <h2>알림 설정</h2>
+
+      <section>
+        <h3>앱 알림</h3>
+        <p class="hint">${notifyStatus()}</p>
+        <button type="button" class="btn ${on ? '' : 'primary'} wide" data-act="toggle">${on ? '앱 알림 끄기' : '앱 알림 켜기'}</button>
+        ${on ? '<button type="button" class="btn wide" data-act="test">테스트 알림 보내기</button>' : ''}
+      </section>
+
+      <section>
+        <h3>캘린더 연동 <small>앱을 닫아 둬도 알림</small></h3>
+        <p class="hint">기본 루틴을 폰 캘린더에 구독하면, 일정마다 시작 시각에 캘린더 알림이 와요. 루틴이 바뀌면 캘린더에도 자동으로 반영돼요.</p>
+        <a class="btn primary wide" href="${esc(webcal)}">아이폰 캘린더에 구독하기</a>
+        <button type="button" class="btn wide" data-act="copy">구독 링크 복사 (구글 캘린더용)</button>
+        <details>
+          <summary>설정 방법</summary>
+          <ul>
+            <li><b>아이폰:</b> 구독 화면에서 <b>'알림 제거'를 끄고</b> 추가해야 알림이 와요.</li>
+            <li><b>구글 캘린더:</b> PC에서 calendar.google.com → 다른 캘린더 + → URL로 추가 → 복사한 링크 붙여넣기. 그다음 그 캘린더의 설정에서 기본 알림을 '0분 전'으로 추가해 주세요.</li>
+            <li>추가 일정 때문에 바뀐 시간(밀기·빼기)은 구독 캘린더에 반영되지 않아요. 추가 일정은 아래에서 따로 넣어 주세요.</li>
+          </ul>
+        </details>
+        <button type="button" class="btn wide" data-act="extras" ${upcoming.length ? '' : 'disabled'}>
+          추가 일정 캘린더에 넣기 (${upcoming.length}개)</button>
+        <p class="hint">받은 파일을 열면 캘린더에 추가돼요. 이동 시간이 있으면 출발 시각에도 알림이 와요.</p>
+      </section>
+
+      <div class="actions"><button type="button" class="btn primary" data-act="close">닫기</button></div>
+    </div>`;
+
+  const act = (name, fn) => {
+    const btn = $sheet.querySelector(`[data-act="${name}"]`);
+    if (btn) btn.onclick = fn;
+  };
+  act('close', () => $sheet.close());
+  act('toggle', async () => {
+    if (!on && 'Notification' in window && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        /* 권한 요청 실패: 화면 안 알림만 */
+      }
+    }
+    setSettings({ notify: !on });
+    openAlarmSettings();
+    render();
+  });
+  act('test', () => {
+    const block = { id: 'test', s: Math.floor(nowMinutes()), e: Math.floor(nowMinutes()) + 30, title: '테스트 알림', category: 'extra' };
+    notify(block, []);
+  });
+  act('copy', async (e) => {
+    try {
+      await navigator.clipboard.writeText(routineUrl);
+      e.target.textContent = '복사했어요 ✓';
+    } catch {
+      prompt('아래 링크를 복사해 주세요', routineUrl);
+    }
+  });
+  act('extras', () => downloadICS('taskmind-extras.ics', extrasICS(upcoming)));
+  if (!$sheet.open) $sheet.showModal();
+}
+
 // ── 공통 ─────────────────────────────────
 function setView(view) {
   state.view = view;
@@ -646,9 +803,11 @@ function tick() {
     if (state.date === lastToday) state.date = t;
     lastToday = t;
   }
+  checkAlarms();
   if (!$sheet.open) render();
 }
 setInterval(tick, REFRESH_MS);
+setInterval(checkAlarms, ALARM_CHECK_MS);
 document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && tick());
 
 render();

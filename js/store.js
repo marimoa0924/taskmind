@@ -76,3 +76,16 @@ export function setNote(id, text) {
   else delete notes[id];
   write(NOTES_KEY, notes);
 }
+
+// ── 설정 ─────────────────────────────────
+const SETTINGS_KEY = 'taskmind.settings';
+let settings = read(SETTINGS_KEY, { notify: false });
+
+export function getSettings() {
+  return settings;
+}
+
+export function setSettings(patch) {
+  settings = { ...settings, ...patch };
+  write(SETTINGS_KEY, settings);
+}
